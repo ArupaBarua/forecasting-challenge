@@ -51,3 +51,16 @@ def test_split_rejects_series_not_longer_than_holdout(make_readings):
     frame = build_target_frame(make_readings(n_ts=24))
     with pytest.raises(ValueError):
         split_train_holdout(frame, 24)
+
+
+def test_tail_shares_use_valid_vms_only():
+    readings = pd.DataFrame(
+        {
+            "timestamp": [0, 0, 0, 0],
+            "vm_id": ["a", "b", "c", "d"],
+            "avg_cpu": [60.0, 90.0, 10.0, np.nan],  # d is not a valid observation
+        }
+    )
+    frame = build_target_frame(readings)
+    assert frame["share_cpu_gt50"].iloc[0] == pytest.approx(2 / 3)
+    assert frame["share_cpu_gt80"].iloc[0] == pytest.approx(1 / 3)

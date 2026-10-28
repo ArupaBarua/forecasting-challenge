@@ -1,0 +1,6 @@
+model,worst_MAE_ratio_vs_shrinkage,adopt
+ridge_a1,1.2193520688246264,no
+ridge_a10,1.1434654958066766,no
+ridge_a30,1.0579382364585193,no
+ridge_a10_icpt,1.3536443782495762,no
+ridge_a10_tail,1.326141675674862,no

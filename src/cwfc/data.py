@@ -21,6 +21,8 @@ READINGS_FILE = "vm_cpu_readings.csv.gz"
 STEP_SECONDS = 300
 COUNT = "active_vm_count"
 CPU = "aggregate_cpu_utilization"
+TAIL50 = "share_cpu_gt50"  # share of valid VMs with avg_cpu above 50%
+TAIL80 = "share_cpu_gt80"  # share of valid VMs with avg_cpu above 80%
 HOLDOUT = 24
 
 
@@ -38,16 +40,22 @@ def load_readings(data_dir: str | Path) -> pd.DataFrame:
 def build_target_frame(readings: pd.DataFrame) -> pd.DataFrame:
     """One row per source timestamp, in chronological order, with both targets.
 
+    Two tail-share columns (``share_cpu_gt50``, ``share_cpu_gt80``) are added
+    for the capacity analysis and as optional model features.
+
     ``timestamp`` keeps the source value (seconds). ``time_utc`` is a datetime
     version of it, used by ``cwfc.validation.rolling_origin_splits``.
     """
     all_ts = pd.Index(np.sort(readings["timestamp"].unique()), name="timestamp")
     valid = readings.dropna(subset=["avg_cpu"]).drop_duplicates(["timestamp", "vm_id"])
+    valid = valid.assign(**{TAIL50: valid["avg_cpu"] > 50.0, TAIL80: valid["avg_cpu"] > 80.0})
     grouped = valid.groupby("timestamp")
     frame = pd.DataFrame(
         {
             COUNT: grouped["vm_id"].nunique(),
             CPU: grouped["avg_cpu"].mean(),
+            TAIL50: grouped[TAIL50].mean(),
+            TAIL80: grouped[TAIL80].mean(),
         }
     ).reindex(all_ts)
     frame[COUNT] = frame[COUNT].fillna(0).astype(int)

@@ -62,7 +62,10 @@ def test_evaluation_does_not_depend_on_the_holdout(make_readings):
     tampered.loc[tampered["timestamp"].isin(last24), "avg_cpu"] = 99.0
     a = evaluate(build_target_frame(readings))
     b = evaluate(build_target_frame(tampered))
-    for key in ("main", "by_horizon", "min_train_sensitivity", "shrinkage_grid", "active_vm_count"):
+    for key in (
+        "main", "by_horizon", "min_train_sensitivity", "shrinkage_grid", "active_vm_count",
+        "ml_comparison", "ml_min_train_sensitivity", "ml_adoption_check",
+    ):
         pd.testing.assert_frame_equal(a[key], b[key])
     assert MAIN_MODEL in a["main"].index
 
@@ -71,7 +74,10 @@ def test_evaluate_cli_writes_tables(tmp_path, make_readings):
     make_readings().to_csv(tmp_path / "vm_cpu_readings.csv.gz", index=False)
     out = tmp_path / "results"
     assert main(["--data", str(tmp_path), "--out", str(out)]) == 0
-    for name in ("main", "by_horizon", "min_train_sensitivity", "shrinkage_grid", "active_vm_count"):
+    for name in (
+        "main", "by_horizon", "min_train_sensitivity", "shrinkage_grid", "active_vm_count",
+        "ml_comparison", "ml_min_train_sensitivity", "ml_adoption_check",
+    ):
         assert (out / f"{name}.csv").is_file()
     assert MAIN_MODEL in pd.read_csv(out / "main.csv")["model"].tolist()
 
@@ -86,3 +92,16 @@ def test_sensitivity_skips_settings_the_series_is_too_short_for(make_readings):
 def test_too_short_series_raises_a_clear_error(make_readings):
     with pytest.raises(ValueError, match="too short"):
         evaluate(build_target_frame(make_readings(n_vms=3, n_ts=70)))  # 46 training rows < 48 + 24
+
+
+def test_adoption_rule_is_applied_mechanically():
+    from cwfc.evaluate import adoption_check
+
+    sens = pd.DataFrame(
+        {"min_train_36": [1.0, 0.90, 0.99], "min_train_48": [1.0, 0.94, 0.80]},
+        index=[MAIN_MODEL, "ridge_good", "ridge_unstable"],
+    )
+    check = adoption_check(sens)
+    assert check.loc["ridge_good", "adopt"] == "yes"  # worst ratio 0.94 <= 0.95
+    assert check.loc["ridge_unstable", "adopt"] == "no"  # worst ratio 0.99 at one setting
+    assert MAIN_MODEL not in check.index

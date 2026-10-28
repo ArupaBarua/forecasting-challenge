@@ -25,6 +25,7 @@ import pandas as pd
 from .baselines import persistence_forecast, seasonal_naive_forecast
 from .data import COUNT, CPU, HOLDOUT, build_target_frame, load_readings, split_train_holdout
 from .metrics import mae, normalized_mae, rmse
+from .ml import ridge_models
 from .models import (
     DEFAULT_K,
     DEFAULT_TAU,
@@ -42,6 +43,7 @@ HORIZON_STEPS = (1, 3, 6, 12, 18, 24)
 REFERENCE = "last_value"
 STRONG_BASELINE = "expanding_mean"
 MAIN_MODEL = f"shrinkage_k{DEFAULT_K}_tau{int(DEFAULT_TAU)}"
+ADOPTION_MARGIN = 0.95  # a ridge model must beat the shrinkage MAE by >= 5% at every min_train
 
 
 def main_models() -> dict:
@@ -60,6 +62,17 @@ def grid_models() -> dict:
     for k in (3, 6):
         for tau in (3, 6, 12):
             models[f"shrinkage_k{k}_tau{tau}"] = partial(shrinkage_forecast, k=k, tau=tau)
+    return models
+
+
+def ml_models() -> dict:
+    """References plus the fixed ridge variants from ``cwfc.ml``."""
+    models = {
+        REFERENCE: persistence_forecast,
+        STRONG_BASELINE: expanding_mean_forecast,
+        MAIN_MODEL: partial(shrinkage_forecast, k=DEFAULT_K, tau=DEFAULT_TAU),
+    }
+    models.update(ridge_models())
     return models
 
 
@@ -124,6 +137,22 @@ def horizon_table(y: np.ndarray, preds: dict, names: list, steps=HORIZON_STEPS) 
     )
 
 
+def adoption_check(sensitivity: pd.DataFrame) -> pd.DataFrame:
+    """Pre-registered rule: adopt a ridge model only if its MAE is at most 95% of the
+    shrinkage MAE at every minimum training size evaluated."""
+    if sensitivity.empty:
+        return pd.DataFrame(columns=["worst_MAE_ratio_vs_shrinkage", "adopt"])
+    ratio = sensitivity.div(sensitivity.loc[MAIN_MODEL], axis=1)
+    ridge_rows = [name for name in ratio.index if name.startswith("ridge")]
+    worst = ratio.loc[ridge_rows].max(axis=1)
+    return pd.DataFrame(
+        {
+            "worst_MAE_ratio_vs_shrinkage": worst,
+            "adopt": np.where(worst <= ADOPTION_MARGIN, "yes", "no"),
+        }
+    )
+
+
 def evaluate_count(train_frame: pd.DataFrame, horizon: int, min_train: int) -> pd.DataFrame:
     y, preds = rolling_origin_predictions(train_frame, {REFERENCE: persistence_forecast}, COUNT, horizon, min_train)
     p = preds[REFERENCE]
@@ -158,12 +187,28 @@ def evaluate(
         sensitivity[f"min_train_{mt}"] = score_table(y_mt, p_mt, peak_threshold)["MAE"]
     y_g, p_g = rolling_origin_predictions(train_frame, grid_models(), CPU, horizon, min_train)
 
+    y_m, p_m = rolling_origin_predictions(train_frame, ml_models(), CPU, horizon, min_train)
+    ml_table = score_table(y_m, p_m, peak_threshold)
+    ml_table["nMAE_vs_shrinkage"] = ml_table["MAE"] / ml_table.loc[MAIN_MODEL, "MAE"]
+    ml_table = ml_table[["MAE", "RMSE", "bias", "nMAE_vs_expanding", "nMAE_vs_shrinkage", "MAE_peak", "MAE_offpeak"]]
+    ml_sensitivity = {}
+    for mt in min_train_grid:
+        try:
+            y_s, p_s = rolling_origin_predictions(train_frame, ml_models(), CPU, horizon, mt)
+        except ValueError:
+            continue
+        ml_sensitivity[f"min_train_{mt}"] = score_table(y_s, p_s, peak_threshold)["MAE"]
+    ml_sensitivity = pd.DataFrame(ml_sensitivity)
+
     return {
         "main": score_table(y, preds, peak_threshold),
         "by_horizon": horizon_table(y, preds, [REFERENCE, STRONG_BASELINE, MAIN_MODEL], steps=HORIZON_STEPS),
         "min_train_sensitivity": pd.DataFrame(sensitivity),
         "shrinkage_grid": score_table(y_g, p_g, peak_threshold)[["MAE", "RMSE", "bias"]],
         "active_vm_count": evaluate_count(train_frame, horizon, min_train),
+        "ml_comparison": ml_table,
+        "ml_min_train_sensitivity": ml_sensitivity,
+        "ml_adoption_check": adoption_check(ml_sensitivity),
         "meta": pd.Series(
             {
                 "train_rows": len(train_frame),
@@ -203,6 +248,9 @@ def main(argv: list[str] | None = None) -> int:
         "by_horizon": "MAE by forecast step (1 step = 5 min)",
         "shrinkage_grid": "Shrinkage sensitivity grid",
         "active_vm_count": "active_vm_count (persistence)",
+        "ml_comparison": "Ridge comparison (candidate: ridge_a10)",
+        "ml_min_train_sensitivity": "Ridge comparison: MAE by minimum training size",
+        "ml_adoption_check": "Adoption rule: ridge must beat shrinkage MAE by >= 5% at every min_train",
     }
     out_dir = Path(args.out)
     out_dir.mkdir(parents=True, exist_ok=True)
