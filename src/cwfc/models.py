@@ -54,3 +54,11 @@ def shrinkage_forecast(
     steps = np.arange(1, len(template) + 1)
     forecast = mu + np.exp(-steps / tau) * (recent - mu)
     return pd.Series(forecast, index=template.index, dtype=float)
+
+
+def moving_average_forecast(train: pd.DataFrame, template: pd.DataFrame, target: str, window: int = 12) -> pd.Series:
+    """Constant forecast equal to the mean of the last ``window`` observations."""
+    if window <= 0:
+        raise ValueError("window must be positive")
+    level = float(_history(train, target)[-window:].mean())
+    return pd.Series(level, index=template.index, dtype=float)

@@ -1,0 +1,2 @@
+model,MAE,RMSE,series_is_constant
+last_value,0.0,0.0,True
